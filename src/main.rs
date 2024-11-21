@@ -1,5 +1,8 @@
 use std::sync::mpsc::{self, Sender};
 
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
+
 use std::thread;
 use std::time::Instant;
 use std::{collections::VecDeque, time::Duration};
@@ -42,21 +45,52 @@ fn calculate_index(x: usize, y: usize) -> usize {
     y * SCREEN_WIDTH + x
 }
 
-fn render_screen(terminal: &mut DefaultTerminal, snake: &VecDeque<Position>) {
-    let mut screen = new_screen();
+fn find_empty_space(screen_buffer: &String, rng: &mut ThreadRng) -> Position {
+    let mut x: usize = 0;
+    let mut y: usize = 0;
 
+    let mut invalid = true;
+    while invalid {
+        x = rng.gen_range(1..SCREEN_WIDTH);
+        y = rng.gen_range(1..SCREEN_HEIGHT);
+
+        let index = calculate_index(x, y);
+        invalid = screen_buffer.chars().nth(index).expect(
+            format!(
+                "invalid index when trying to calculate next position for food: {}",
+                index
+            )
+            .as_str(),
+        ) != ' ';
+    }
+
+    Position { x, y }
+}
+
+fn render_screen(
+    terminal: &mut DefaultTerminal,
+    screen_buffer: &mut String,
+    snake: &VecDeque<Position>,
+    food: &Position,
+) {
     for sp in snake.iter().map(|pos| calculate_index(pos.x, pos.y)) {
-        screen.replace_range(sp..sp + 1, "O");
+        screen_buffer.replace_range(sp..sp + 1, "O");
     }
 
     let head_index = calculate_index(snake[0].x, snake[0].y);
-    screen.replace_range(head_index..head_index + 1, "@");
+    screen_buffer.replace_range(head_index..head_index + 1, "@");
 
-    screen = format!("{} {:?}", screen, snake);
+    let food_index = calculate_index(food.x, food.y);
+    screen_buffer.replace_range(food_index..food_index + 1, "%");
+
+    (*screen_buffer).push_str(format!("{:?}", snake).as_str());
 
     terminal
         .draw(|frame| {
-            frame.render_widget(Paragraph::new(screen), frame.area());
+            frame.render_widget(
+                Paragraph::new(String::from(screen_buffer.as_str())),
+                frame.area(),
+            );
         })
         .unwrap();
 }
@@ -119,15 +153,16 @@ fn calculate_head_next(head: &Position, direction: &Direction) -> Result<Positio
 fn main() {
     let mut terminal = ratatui::init();
     terminal.clear().unwrap();
-
     let (tx, rx) = mpsc::channel::<Result<Direction, GameState>>();
+    let mut rng = thread_rng();
 
+    let mut screen_buffer = new_screen();
     let mut snake: VecDeque<Position> = VecDeque::from(vec![
         Position { x: 12, y: 1 },
         Position { x: 11, y: 1 },
         Position { x: 10, y: 1 },
     ]);
-    // let food: Position = Position { x: 60, y: 15 };
+    let mut food: Position = Position { x: 60, y: 15 };
     // let score: u32 = 0;
     let mut snake_direction: Direction = Direction::RIGHT;
     let mut game_state: GameState = GameState::ACTIVE;
@@ -145,8 +180,6 @@ fn main() {
         lag += delta;
         t0 = t1;
 
-        render_screen(&mut terminal, &snake);
-
         // handle logic
         let next_direction = rx.try_recv();
         if next_direction.is_ok() {
@@ -156,7 +189,14 @@ fn main() {
             }
         }
 
-        while lag >= FRAME_DURATION && game_state != GameState::PAUSED {
+        while game_state != GameState::PAUSED && lag >= FRAME_DURATION {
+            if snake[0].x == food.x && snake[0].y == food.y {
+                if let Some(pos) = snake.back() {
+                    snake.push_back(Position { x: pos.x, y: pos.y });
+                }
+                food = find_empty_space(&screen_buffer, &mut rng);
+            }
+
             match calculate_head_next(&snake[0], &snake_direction) {
                 Ok(next_head) => {
                     snake.push_front(next_head);
@@ -167,6 +207,10 @@ fn main() {
 
             lag -= FRAME_DURATION;
         }
+
+        // render screen
+        screen_buffer = new_screen();
+        render_screen(&mut terminal, &mut screen_buffer, &snake, &food);
     }
 
     ratatui::restore();
