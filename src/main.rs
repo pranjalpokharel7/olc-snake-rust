@@ -1,5 +1,6 @@
-#![allow(dead_code, unused_mut, unused_variables)]
+use std::sync::mpsc::{self, Sender};
 
+use std::thread;
 use std::time::Instant;
 use std::{collections::VecDeque, time::Duration};
 
@@ -18,7 +19,7 @@ struct Position {
     y: usize,
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Copy)]
 enum Direction {
     UP,
     RIGHT,
@@ -60,18 +61,25 @@ fn render_screen(terminal: &mut DefaultTerminal, snake: &VecDeque<Position>) {
         .unwrap();
 }
 
-fn process_input(snake_direction: &mut Direction, game_state: &mut GameState) -> () {
+fn process_input(snake_direction: Direction) -> Result<Direction, GameState> {
     if let event::Event::Key(key) = event::read().unwrap() {
         if key.kind == KeyEventKind::Press {
-            match key.code {
-                KeyCode::Up => *snake_direction = Direction::UP,
-                KeyCode::Down => *snake_direction = Direction::DOWN,
-                KeyCode::Left => *snake_direction = Direction::LEFT,
-                KeyCode::Right => *snake_direction = Direction::RIGHT,
-                KeyCode::Char('q') => *game_state = GameState::OVER,
-                _ => (),
-            }
+            return match key.code {
+                KeyCode::Up => Ok(Direction::UP),
+                KeyCode::Down => Ok(Direction::DOWN),
+                KeyCode::Left => Ok(Direction::LEFT),
+                KeyCode::Right => Ok(Direction::RIGHT),
+                KeyCode::Char('q') => Err(GameState::OVER),
+                _ => Ok(snake_direction),
+            };
         }
+    }
+    return Ok(snake_direction);
+}
+
+fn process_input_thread(snake_direction: Direction, tx: Sender<Result<Direction, GameState>>) {
+    loop {
+        tx.send(process_input(snake_direction)).unwrap();
     }
 }
 
@@ -100,7 +108,7 @@ fn calculate_head_next(head: &Position, direction: &Direction) -> Result<Positio
         || next_position.y < 1
         || next_position.y >= SCREEN_HEIGHT - 1
     {
-        Err(GameState::PAUSED)
+        Err(GameState::OVER)
     } else {
         Ok(next_position)
     };
@@ -110,19 +118,23 @@ fn main() {
     let mut terminal = ratatui::init();
     terminal.clear().unwrap();
 
-    let mut screen = new_screen();
+    let (tx, rx) = mpsc::channel::<Result<Direction, GameState>>();
+
     let mut snake: VecDeque<Position> = VecDeque::from(vec![
         Position { x: 12, y: 1 },
         Position { x: 11, y: 1 },
         Position { x: 10, y: 1 },
     ]);
-    let food: Position = Position { x: 60, y: 15 };
-    let score: u32 = 0;
+    // let food: Position = Position { x: 60, y: 15 };
+    // let score: u32 = 0;
     let mut snake_direction: Direction = Direction::RIGHT;
     let mut game_state: GameState = GameState::ACTIVE;
 
     let mut t0 = Instant::now();
     let mut lag = Duration::from_millis(0);
+
+    thread::spawn(move || process_input_thread(snake_direction, tx));
+
     while game_state != GameState::OVER {
         // we need to constraint the time elapsed between two loop runs
         // so that the game will run at constant speed on both fast/slow devices
@@ -134,9 +146,17 @@ fn main() {
         render_screen(&mut terminal, &snake);
 
         // process_input(&mut snake_direction, &mut game_state);
-        
+
         while lag >= FRAME_DURATION && game_state != GameState::PAUSED {
             // handle logic
+            let next_direction = rx.try_recv();
+            if next_direction.is_ok() {
+                match next_direction.unwrap() {
+                    Ok(direction) => snake_direction = direction,
+                    Err(state) => game_state = state,
+                }
+            }
+
             match calculate_head_next(&snake[0], &snake_direction) {
                 Ok(next_head) => {
                     snake.push_front(next_head);
