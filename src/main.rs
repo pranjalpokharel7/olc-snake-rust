@@ -70,6 +70,8 @@ fn process_input(snake_direction: Direction) -> Result<Direction, GameState> {
                 KeyCode::Left => Ok(Direction::LEFT),
                 KeyCode::Right => Ok(Direction::RIGHT),
                 KeyCode::Char('q') => Err(GameState::OVER),
+                KeyCode::Char('p') => Err(GameState::PAUSED),
+                KeyCode::Char('s') => Err(GameState::ACTIVE),
                 _ => Ok(snake_direction),
             };
         }
@@ -108,7 +110,7 @@ fn calculate_head_next(head: &Position, direction: &Direction) -> Result<Positio
         || next_position.y < 1
         || next_position.y >= SCREEN_HEIGHT - 1
     {
-        Err(GameState::OVER)
+        Err(GameState::PAUSED)
     } else {
         Ok(next_position)
     };
@@ -145,18 +147,16 @@ fn main() {
 
         render_screen(&mut terminal, &snake);
 
-        // process_input(&mut snake_direction, &mut game_state);
+        // handle logic
+        let next_direction = rx.try_recv();
+        if next_direction.is_ok() {
+            match next_direction.unwrap() {
+                Ok(direction) => snake_direction = direction,
+                Err(state) => game_state = state,
+            }
+        }
 
         while lag >= FRAME_DURATION && game_state != GameState::PAUSED {
-            // handle logic
-            let next_direction = rx.try_recv();
-            if next_direction.is_ok() {
-                match next_direction.unwrap() {
-                    Ok(direction) => snake_direction = direction,
-                    Err(state) => game_state = state,
-                }
-            }
-
             match calculate_head_next(&snake[0], &snake_direction) {
                 Ok(next_head) => {
                     snake.push_front(next_head);
