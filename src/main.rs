@@ -1,154 +1,22 @@
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 
 use std::thread;
 use std::time::Instant;
 use std::{collections::VecDeque, time::Duration};
 
-use constants::{FRAME_DURATION, SCREEN_HEIGHT, SCREEN_STRING, SCREEN_WIDTH};
-use ratatui::{
-    crossterm::event::{self, KeyCode, KeyEventKind},
-    widgets::Paragraph,
-    DefaultTerminal,
-};
+use constants::{FRAME_DURATION_HORIZONTAL, FRAME_DURATION_VERTICAL, SCREEN_STRING};
+use input::process_input;
+use screen::{clear_screen, find_empty_position, render_screen};
+use snake::calculate_next_head_position;
+use types::{Direction, GameState, Position};
 
 mod constants;
-
-#[derive(Debug)]
-struct Position {
-    x: usize,
-    y: usize,
-}
-
-#[derive(PartialEq, Clone, Copy)]
-enum Direction {
-    UP,
-    RIGHT,
-    DOWN,
-    LEFT,
-}
-
-#[derive(PartialEq)]
-enum GameState {
-    ACTIVE,
-    PAUSED,
-    OVER,
-}
-
-#[inline(always)]
-fn calculate_index(x: usize, y: usize) -> usize {
-    y * SCREEN_WIDTH + x
-}
-
-fn clear_screen(screen_buffer: &mut Vec<u8>) {
-    // draw empty spaces
-    for x in 1..SCREEN_WIDTH - 2 {
-        for y in 1..SCREEN_HEIGHT - 1 {
-            screen_buffer[calculate_index(x, y)] = b' ';
-        }
-    }
-}
-
-fn find_empty_position(screen_buffer: &Vec<u8>, rng: &mut ThreadRng) -> Position {
-    let mut x: usize = 0;
-    let mut y: usize = 0;
-
-    let mut invalid = true;
-    while invalid {
-        x = rng.gen_range(1..SCREEN_WIDTH);
-        y = rng.gen_range(1..SCREEN_HEIGHT);
-
-        let index = calculate_index(x, y);
-        invalid = screen_buffer[index] != b' ';
-    }
-
-    Position { x, y }
-}
-
-fn render_screen(
-    terminal: &mut DefaultTerminal,
-    screen_buffer: &mut [u8],
-    snake: &VecDeque<Position>,
-    food: &Position,
-) {
-    // draw snake
-    for sp in snake.iter().map(|pos| calculate_index(pos.x, pos.y)) {
-        screen_buffer[sp] = b'O';
-    }
-    let head_index = calculate_index(snake[0].x, snake[0].y);
-    screen_buffer[head_index] = b'@';
-
-    // draw food
-    let food_index = calculate_index(food.x, food.y);
-    screen_buffer[food_index] = b'%';
-
-    // render buffer to terminal
-    terminal
-        .draw(|frame| {
-            frame.render_widget(
-                Paragraph::new(String::from_utf8_lossy(screen_buffer)),
-                frame.area(),
-            );
-        })
-        .unwrap();
-}
-
-fn process_input(snake_direction: Direction) -> Result<Direction, GameState> {
-    if let event::Event::Key(key) = event::read().unwrap() {
-        if key.kind == KeyEventKind::Press {
-            return match key.code {
-                KeyCode::Up => Ok(Direction::UP),
-                KeyCode::Down => Ok(Direction::DOWN),
-                KeyCode::Left => Ok(Direction::LEFT),
-                KeyCode::Right => Ok(Direction::RIGHT),
-                KeyCode::Char('q') => Err(GameState::OVER),
-                KeyCode::Char('p') => Err(GameState::PAUSED),
-                KeyCode::Char('s') => Err(GameState::ACTIVE),
-                _ => Ok(snake_direction),
-            };
-        }
-    }
-    return Ok(snake_direction);
-}
-
-fn process_input_thread(snake_direction: Direction, tx: Sender<Result<Direction, GameState>>) {
-    loop {
-        tx.send(process_input(snake_direction)).unwrap();
-    }
-}
-
-fn calculate_head_next(head: &Position, direction: &Direction) -> Result<Position, GameState> {
-    let next_position = match direction {
-        Direction::UP => Position {
-            x: head.x,
-            y: head.y - 1,
-        },
-        Direction::DOWN => Position {
-            x: head.x,
-            y: head.y + 1,
-        },
-        Direction::LEFT => Position {
-            x: head.x - 1,
-            y: head.y,
-        },
-        Direction::RIGHT => Position {
-            x: head.x + 1,
-            y: head.y,
-        },
-    };
-
-    return if next_position.x < 1
-        || next_position.x >= SCREEN_WIDTH - 1
-        || next_position.y < 1
-        || next_position.y >= SCREEN_HEIGHT - 1
-    {
-        Err(GameState::PAUSED)
-    } else {
-        Ok(next_position)
-    };
-}
+mod input;
+mod screen;
+mod snake;
+mod types;
 
 fn main() {
     let mut terminal = ratatui::init();
@@ -170,7 +38,9 @@ fn main() {
     let mut t0 = Instant::now();
     let mut lag = Duration::from_millis(0);
 
-    thread::spawn(move || process_input_thread(snake_direction, tx));
+    thread::spawn(move || loop {
+        tx.send(process_input(snake_direction)).unwrap();
+    });
 
     while game_state != GameState::OVER {
         // we need to constraint the time elapsed between two loop runs
@@ -189,7 +59,12 @@ fn main() {
             }
         }
 
-        while game_state != GameState::PAUSED && lag >= FRAME_DURATION {
+        let frame_cap = if snake_direction == Direction::UP || snake_direction == Direction::DOWN {
+            FRAME_DURATION_VERTICAL
+        } else {
+            FRAME_DURATION_HORIZONTAL
+        };
+        while game_state != GameState::PAUSED && lag >= frame_cap {
             if snake[0].x == food.x && snake[0].y == food.y {
                 if let Some(pos) = snake.back() {
                     snake.push_back(Position { x: pos.x, y: pos.y });
@@ -197,7 +72,7 @@ fn main() {
                 food = find_empty_position(&screen_buffer, &mut rng);
             }
 
-            match calculate_head_next(&snake[0], &snake_direction) {
+            match calculate_next_head_position(&snake[0], &snake_direction) {
                 Ok(next_head) => {
                     snake.push_front(next_head);
                     snake.pop_back();
@@ -205,7 +80,7 @@ fn main() {
                 Err(state) => game_state = state,
             }
 
-            lag -= FRAME_DURATION;
+            lag -= frame_cap;
         }
 
         // render screen
