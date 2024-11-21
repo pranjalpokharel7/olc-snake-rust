@@ -37,15 +37,21 @@ enum GameState {
     OVER,
 }
 
-fn new_screen() -> String {
-    SCREEN_STRING.into()
-}
-
+#[inline(always)]
 fn calculate_index(x: usize, y: usize) -> usize {
     y * SCREEN_WIDTH + x
 }
 
-fn find_empty_space(screen_buffer: &String, rng: &mut ThreadRng) -> Position {
+fn clear_screen(screen_buffer: &mut Vec<u8>) {
+    // draw empty spaces
+    for x in 1..SCREEN_WIDTH - 2 {
+        for y in 1..SCREEN_HEIGHT - 1 {
+            screen_buffer[calculate_index(x, y)] = b' ';
+        }
+    }
+}
+
+fn find_empty_position(screen_buffer: &Vec<u8>, rng: &mut ThreadRng) -> Position {
     let mut x: usize = 0;
     let mut y: usize = 0;
 
@@ -55,13 +61,7 @@ fn find_empty_space(screen_buffer: &String, rng: &mut ThreadRng) -> Position {
         y = rng.gen_range(1..SCREEN_HEIGHT);
 
         let index = calculate_index(x, y);
-        invalid = screen_buffer.chars().nth(index).expect(
-            format!(
-                "invalid index when trying to calculate next position for food: {}",
-                index
-            )
-            .as_str(),
-        ) != ' ';
+        invalid = screen_buffer[index] != b' ';
     }
 
     Position { x, y }
@@ -69,26 +69,26 @@ fn find_empty_space(screen_buffer: &String, rng: &mut ThreadRng) -> Position {
 
 fn render_screen(
     terminal: &mut DefaultTerminal,
-    screen_buffer: &mut String,
+    screen_buffer: &mut [u8],
     snake: &VecDeque<Position>,
     food: &Position,
 ) {
+    // draw snake
     for sp in snake.iter().map(|pos| calculate_index(pos.x, pos.y)) {
-        screen_buffer.replace_range(sp..sp + 1, "O");
+        screen_buffer[sp] = b'O';
     }
-
     let head_index = calculate_index(snake[0].x, snake[0].y);
-    screen_buffer.replace_range(head_index..head_index + 1, "@");
+    screen_buffer[head_index] = b'@';
 
+    // draw food
     let food_index = calculate_index(food.x, food.y);
-    screen_buffer.replace_range(food_index..food_index + 1, "%");
+    screen_buffer[food_index] = b'%';
 
-    (*screen_buffer).push_str(format!("{:?}", snake).as_str());
-
+    // render buffer to terminal
     terminal
         .draw(|frame| {
             frame.render_widget(
-                Paragraph::new(String::from(screen_buffer.as_str())),
+                Paragraph::new(String::from_utf8_lossy(screen_buffer)),
                 frame.area(),
             );
         })
@@ -156,7 +156,7 @@ fn main() {
     let (tx, rx) = mpsc::channel::<Result<Direction, GameState>>();
     let mut rng = thread_rng();
 
-    let mut screen_buffer = new_screen();
+    let mut screen_buffer = SCREEN_STRING.as_bytes().to_vec();
     let mut snake: VecDeque<Position> = VecDeque::from(vec![
         Position { x: 12, y: 1 },
         Position { x: 11, y: 1 },
@@ -194,7 +194,7 @@ fn main() {
                 if let Some(pos) = snake.back() {
                     snake.push_back(Position { x: pos.x, y: pos.y });
                 }
-                food = find_empty_space(&screen_buffer, &mut rng);
+                food = find_empty_position(&screen_buffer, &mut rng);
             }
 
             match calculate_head_next(&snake[0], &snake_direction) {
@@ -209,7 +209,7 @@ fn main() {
         }
 
         // render screen
-        screen_buffer = new_screen();
+        clear_screen(&mut screen_buffer);
         render_screen(&mut terminal, &mut screen_buffer, &snake, &food);
     }
 
