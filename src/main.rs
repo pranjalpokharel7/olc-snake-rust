@@ -51,10 +51,20 @@ fn main() {
         t0 = t1;
 
         // handle logic
-        let next_direction = rx.try_recv();
-        if next_direction.is_ok() {
-            match next_direction.unwrap() {
-                Ok(direction) => snake_direction = direction,
+        let direction_recv = rx.try_recv();
+        if direction_recv.is_ok() {
+            match direction_recv.unwrap() {
+                Ok(next_direction) => {
+                    if !matches!(
+                        (snake_direction, next_direction),
+                        (Direction::UP, Direction::DOWN)
+                            | (Direction::DOWN, Direction::UP)
+                            | (Direction::LEFT, Direction::RIGHT)
+                            | (Direction::RIGHT, Direction::LEFT)
+                    ) {
+                        snake_direction = next_direction;
+                    }
+                }
                 Err(state) => game_state = state,
             }
         }
