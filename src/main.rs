@@ -75,6 +75,7 @@ fn main() {
             FRAME_DURATION_HORIZONTAL
         };
         while game_state != GameState::PAUSED && lag >= frame_cap {
+            // collision derection against food
             if snake[0].x == food.x && snake[0].y == food.y {
                 if let Some(pos) = snake.back() {
                     snake.push_back(Position { x: pos.x, y: pos.y });
@@ -82,7 +83,15 @@ fn main() {
                 food = find_empty_position(&screen_buffer, &mut rng);
             }
 
-            match calculate_next_head_position(&snake[0], &snake_direction) {
+            // collision detection against snake itself
+            let head = &snake[0];
+            for i in 1..snake.len() {
+                if snake[i].x == head.x && snake[i].y == head.y {
+                    game_state = GameState::OVER;
+                }
+            }
+
+            match calculate_next_head_position(head, &snake_direction) {
                 Ok(next_head) => {
                     snake.push_front(next_head);
                     snake.pop_back();
